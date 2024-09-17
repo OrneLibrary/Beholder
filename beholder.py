@@ -1,129 +1,126 @@
-import os, os.path, sys, getopt, re, json
-from os import path
+import os
+import sys
+import getopt
+import re
+import json
+from typing import List, Dict
 
-def main(argv):
+def main(argv: List[str]) -> None:
     inputfile = ''
     outputdir = ''
-    json = False
+    json_output = False
 
     try:
-        opts, args = getopt.getopt(argv,"hi:o:j",["ifile=","ofile=","json"])
+        opts, _ = getopt.getopt(argv, "hi:o:j", ["ifile=", "ofile=", "json"])
     except getopt.GetoptError:
         print('usage: beholder.py -i <input_file> -o <output_directory>')
         sys.exit(2)
+
     for opt, arg in opts:
         if opt == '-h':
             print('usage: beholder.py -i <input_GNMAP_file> -o <output_directory>')
             sys.exit()
         elif opt in ("-i", "--ifile"):
-            if path.exists(arg):
-                if arg.endswith('.gnmap'):
-                    inputfile = arg
-                else:
-                    print('Error: Incorrect file type\nPlease provide a .gnmap file')
-                    sys.exit(2)
-            else: 
+            if not os.path.exists(arg):
                 print(f'Error: {arg} does not exist')
                 sys.exit(2)
+            if not arg.endswith('.gnmap'):
+                print('Error: Incorrect file type\nPlease provide a .gnmap file')
+                sys.exit(2)
+            inputfile = arg
         elif opt in ("-o", "--ofile"):
-            if path.isdir(arg):
-                outputdir = arg
-            else: 
+            if not os.path.isdir(arg):
                 print(f'Error: No such directory\n{arg} does not exist')
-
+                sys.exit(2)
+            outputdir = arg
         elif opt in ("-j", "--json"):
-            json = True
+            json_output = True
 
-    parse_lines(get_lines(inputfile),outputdir)
-    if json:
-        produceJSON(outputdir,get_lines(inputfile))
+    lines = get_lines(inputfile)
+    parse_lines(lines, outputdir)
+    if json_output:
+        produce_json(outputdir, lines)
 
-#Opens input file and produces lines from content
-def get_lines(rfile):
-    results = open(f'{rfile}','r')
-    lines = results.readlines()
-    results.close()
+def get_lines(rfile: str) -> List[str]:
+    with open(rfile, 'r') as results:
+        return results.readlines()
 
-    return lines
-
-def parse_lines(lines, ddir):
+def parse_lines(lines: List[str], ddir: str) -> None:
+    os.makedirs(os.path.join(ddir, 'hosts'), exist_ok=True)
+    
     for line in lines:
-        #Ignores only status lines in the gnmap
-        if 'Status' not in line:
-            #Split each line into two entries (IP section, ports section)
-            parts = (line.split("()"))
-            if len(parts) > 1:
-                #Finds only the IP address in the IP section
-                host = re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", parts[0])
-                #open file for writing list of live hosts
-                if not os.path.exists(f'{ddir}/hosts'):
-                    os.makedirs(f'{ddir}/hosts')
-                with open(f'{ddir}/livehosts.txt', 'a') as livefile, open(f'{ddir}/hosts/{host[0]}.txt', 'a') as hostfile:
-                    #write the IP address to the file
-                    livefile.writelines(f"{host[0]}\n")
-                    #Splits the ports section based on comma delimation 
-                    ports = parts[1].split(", ")
-                    #iterate through list of ports
-                    for p in ports:
-                        #Tidy up the data
-                        port = p.replace("\tPorts: ",'')
-                        port = re.findall(r"^\d{1,5}",port)
-                        #ignore hosts with no ports open
-                        if len(port)>=1:
-                            #open cooresponding port file to add IP to
-                            hostfile.writelines(f'{port[0]}\n')
-                            portfile = open(f'{ddir}/{port[0]}.txt', 'a')
-                            #Add entry 
-                            portfile.writelines(f"{host[0]}:{port[0]}\n")
-                            #check if the port is a known web port
-                            if int(port[0]) in [80, 8080, 443] or int(port[0]) > 1025:
-                                #open web file
-                                with open(f'{ddir}/web.txt', 'a') as web:
-                                    #write entry
-                                    web.writelines(f"{host[0]}:{port[0]}\n")
-                            #check if the port is a known ephemeral port
-                            if int(port[0]) > 1025:
-                                #open web file
-                                with open(f'{ddir}/ephemeral.txt', 'a') as eph:
-                                    #write entry
-                                    eph.writelines(f"{host[0]}:{port[0]}\n")
+        if 'Status' in line:
+            continue
 
-def produceJSON(ddir, lines):
-    hostDict = {'boards':[
-        {
+        parts = line.split("()")
+        if len(parts) <= 1:
+            continue
+
+        host = re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", parts[0])
+        if not host:
+            continue
+
+        host = host[0]
+        with open(os.path.join(ddir, 'livehosts.txt'), 'a') as livefile, \
+             open(os.path.join(ddir, 'hosts', f'{host}.txt'), 'a') as hostfile:
+            livefile.write(f"{host}\n")
+            
+            ports = parts[1].split(", ")
+            for p in ports:
+                port = re.findall(r"^\d{1,5}", p.replace("\tPorts: ", ''))
+                if not port:
+                    continue
+                
+                port = port[0]
+                hostfile.write(f'{port}\n')
+                
+                with open(os.path.join(ddir, f'{port}.txt'), 'a') as portfile:
+                    portfile.write(f"{host}:{port}\n")
+                
+                port_num = int(port)
+                if port_num in [80, 8080, 443] or port_num > 1025:
+                    with open(os.path.join(ddir, 'web.txt'), 'a') as web:
+                        web.write(f"{host}:{port}\n")
+                
+                if port_num > 1025:
+                    with open(os.path.join(ddir, 'ephemeral.txt'), 'a') as eph:
+                        eph.write(f"{host}:{port}\n")
+
+def produce_json(ddir: str, lines: List[str]) -> None:
+    host_dict: Dict = {
+        'boards': [{
             "name": "Investigate",
             "lists": [{
                 "name": "To-Review",
-                "cards": [
-
-                ]
+                "cards": []
             }]
-        }
-    ]}
+        }]
+    }
 
     for line in lines:
-        #Ignores only status lines in the gnmap
-        if 'Status' not in line:
-            #Split the line line into two entries (IP section, ports section)
-            parts = (line.split("()"))
-            #Only include the host if it has open ports
-            if len(parts) > 1:
-                innerDict = {}
-                #Finds only the IP address in the IP section
-                host = re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", parts[0])
-                innerDict['name'] = host[0]
-                innerDict['tasks'] = []
-                #Splits the ports section based on comma delimation 
-                ports = parts[1].split(", ")
-                #iterate through list of ports
-                for p in ports:
-                    #Tidy up the data
-                    port = p.replace("\tPorts: ",'')
-                    port = re.findall(r"^\d{1,5}",port)
-                    innerDict['tasks'].append(port[0])
-                hostDict['boards'][0]['lists'][0]['cards'].append(innerDict)
-    with open(f'{ddir}/output.json', 'a') as output:
-        json.dump(hostDict, output, indent = 4)
+        if 'Status' in line:
+            continue
+
+        parts = line.split("()")
+        if len(parts) <= 1:
+            continue
+
+        host = re.findall(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b", parts[0])
+        if not host:
+            continue
+
+        inner_dict = {
+            'name': host[0],
+            'tasks': [
+                re.findall(r"^\d{1,5}", p.replace("\tPorts: ", ''))[0]
+                for p in parts[1].split(", ")
+                if re.findall(r"^\d{1,5}", p.replace("\tPorts: ", ''))
+            ]
+        }
+        host_dict['boards'][0]['lists'][0]['cards'].append(inner_dict)
+
+    with open(os.path.join(ddir, 'output.json'), 'w') as output:
+        json.dump(host_dict, output, indent=4)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
